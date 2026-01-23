@@ -26,15 +26,22 @@ export default function EditRecordScreen() {
     useEffect(() => {
         if (id) {
             const loadRecord = async () => {
-                const records = await recordsRepository.getAll();
-                const record = records.find(r => r.id === id);
-                if (record) {
-                    setDate(record.date);
-                    setSpent(String(record.spent));
-                    setReturned(record.returned !== null ? String(record.returned) : '');
-                    setMemo(record.memo || '');
+                try {
+                    const records = await recordsRepository.getAll();
+                    const record = records.find(r => r.id === id);
+                    if (record) {
+                        setDate(record.date);
+                        setSpent(String(record.spent));
+                        setReturned(record.returned !== null ? String(record.returned) : '');
+                        setMemo(record.memo || '');
+                    }
+                } catch (error) {
+                    console.error('Failed to load record for edit:', error);
+                    Alert.alert('エラー', 'レコードの読み込みに失敗しました');
+                    router.back();
+                } finally {
+                    setLoading(false);
                 }
-                setLoading(false);
             };
             loadRecord();
         }
