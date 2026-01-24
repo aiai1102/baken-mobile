@@ -1,6 +1,80 @@
 # TestFlightクラッシュ問題 - 調査レポート
 
-## 問題の概要
+> **TL;DR（要約）**: Expo SDK 54でTestFlightが起動時クラッシュする問題は、**New Architecture ONに戻す + Reanimated 4.1.1に更新 + 矛盾する設定を削除**で解決しました。誤った前提（nativewind 4がreanimated 4未サポート）が原因で板挟みだと判断していましたが、実際にはNativeWind v4.2.0+はReanimated v4対応済みでした。
+
+## ✅ 解決済み（2026-01-25）
+
+**結論**: TestFlightでの起動クラッシュは**New Architecture ON + Reanimated 4.1.1**で解決しました。
+
+### 成功した構成
+
+```json
+// app.json
+{
+  "newArchEnabled": true  // ONに戻す
+}
+
+// eas.json
+{
+  "production": {
+    "autoIncrement": true
+    // RCT_NEW_ARCH_ENABLEDは削除（矛盾を排除）
+  }
+}
+
+// package.json
+{
+  "react-native-reanimated": "~4.1.1",  // SDK 54推奨
+  "nativewind": "^4.2.1"  // デザイン維持
+}
+```
+
+### 解決の手順
+
+1. **誤った前提の修正**
+   - ❌ 誤り: "nativewind 4はreanimated 4未サポート"
+   - ✅ 正解: **NativeWind v4.2.0+はReanimated v4対応済み**
+
+2. **設定の一本化**
+   ```bash
+   # app.jsonでNew Arch ONに戻す
+   "newArchEnabled": true
+
+   # eas.jsonの矛盾する設定を削除
+   # RCT_NEW_ARCH_ENABLED: "0" を削除
+
+   # package.jsonのexclude設定を削除
+   # "expo.install.exclude" から "react-native-reanimated" を削除
+   ```
+
+3. **依存関係の修正**
+   ```bash
+   npx expo install react-native-reanimated  # 4.1.1に更新
+   npx expo-doctor  # 問題なし確認
+   ```
+
+4. **ビルド＆テスト**
+   ```bash
+   eas build --platform ios --profile production --clear-cache
+   eas submit --platform ios --latest
+   # TestFlightで起動成功！
+   ```
+
+### 重要な学び
+
+**板挟み状態は存在しなかった**:
+- 初期の調査で「New Arch ONでクラッシュ、OFFでビルド失敗」という板挟みだと判断
+- しかし実際には、NativeWind v4.2.1が既にReanimated v4対応済みだった
+- 正しい構成（New Arch ON + Reanimated 4）で問題なく動作した
+
+**矛盾する設定が原因**:
+- `app.json`の`newArchEnabled`と`eas.json`の`RCT_NEW_ARCH_ENABLED`が矛盾
+- `package.json`の`expo.install.exclude`がReanimatedの自動更新を阻害
+- これらの矛盾を解消することで解決
+
+---
+
+## 問題の概要（初期状態）
 
 **症状**: Expo SDK 54で開発したiOSアプリがTestFlightで起動直後にクラッシュする
 
@@ -151,7 +225,9 @@ CompileC ReanimatedRuntime.cpp
 
 ---
 
-## ジレンマ（板挟み状態）
+## ❌ ジレンマ（板挟み状態）- 誤った前提に基づく分析
+
+**注意**: このセクションは**誤った前提**（nativewind 4がreanimated 4未サポート）に基づいた分析です。実際にはNativeWind v4.2.0+はReanimated v4対応済みで、板挟み状態は存在しませんでした。
 
 ### パターンA: New Architecture有効化
 ```
@@ -187,35 +263,31 @@ react-native-reanimated: 3.16.1
 }
 ```
 
-**制約条件**:
-1. nativewind 4.2.1は**デザイン全体に使用**（変更不可）
-2. nativewind 4はreanimated 4未サポート → reanimated 3が必須
-3. reanimated 3 + RN 0.81でFollyビルドエラー
-4. New Arch有効化でreanimated 4使用可能だが、TestFlightでクラッシュ
+**制約条件（誤った前提を含む）**:
+1. nativewind 4.2.1は**デザイン全体に使用**（変更不可）✅
+2. ❌ **誤り**: nativewind 4はreanimated 4未サポート → reanimated 3が必須
+   - ✅ **正解**: NativeWind v4.2.0+はReanimated v4対応済み
+3. reanimated 3 + RN 0.81でFollyビルドエラー（実際に発生）
+4. ❌ **誤り**: New Arch有効化でreanimated 4使用可能だが、TestFlightでクラッシュ
+   - ✅ **正解**: New Arch ON + Reanimated 4でTestFlight正常動作
 
 ---
 
-## 検討中の解決策
+## ~~検討中の解決策~~（実際の解決策で不要になった）
 
-### オプション1: Reanimated 3.14.0を試す
-- 3.16.1より古いバージョンでFolly互換性が良い可能性
-- nativewindのデザインは維持される
-- **リスク**: さらに古いバグがある可能性
+以下の選択肢を検討していましたが、**誤った前提**（nativewind 4がreanimated 4未サポート）を訂正することで、すべて不要になりました。
 
-### オプション2: New Architectureを有効化してクラッシュ原因を特定
-1. `newArchEnabled: true`でビルド
-2. TestFlightにアップロード
-3. App Store Connectからクラッシュログを詳細分析
-4. 真の原因を特定して個別に修正
-- **リスク**: 時間がかかる、根本解決できない可能性
+### ~~オプション1: Reanimated 3.14.0を試す~~
+- **不要になった理由**: Reanimated 4が正解だった
 
-### オプション3: nativewind v2にダウングレード
-- nativewind v2はReanimated不要の可能性
-- **リスク**: デザインの一部調整が必要、移行コストが大きい
+### ~~オプション2: New Architectureを有効化してクラッシュ原因を特定~~
+- **これが正解**: New Arch ONで正常動作した
 
-### オプション4: Expo SDK 53にダウングレード
-- SDK 53ならNew Archなしで動作する可能性
-- **リスク**: 他の機能への影響、後退
+### ~~オプション3: nativewind v2にダウングレード~~
+- **不要になった理由**: nativewind 4.2.1がReanimated 4対応済みだった
+
+### ~~オプション4: Expo SDK 53にダウングレード~~
+- **不要になった理由**: SDK 54の推奨構成で動作した
 
 ---
 
@@ -241,7 +313,8 @@ React Native 0.68+で導入された新しいレンダリングエンジン:
 
 ### NativeWind
 - React NativeでTailwind CSSを使用するライブラリ
-- v4はReanimated 4未サポート（2026年1月時点）
+- ~~v4はReanimated 4未サポート（2026年1月時点）~~ ← **誤り**
+- ✅ **正解**: v4.2.0+はReanimated v4対応済み
 
 ---
 
@@ -262,28 +335,22 @@ React Native 0.68+で導入された新しいレンダリングエンジン:
 
 ---
 
-## 現在の設定ファイル
+## 現在の設定ファイル（解決後の正しい構成）
 
 ### app.json（重要部分）
 ```json
 {
   "expo": {
-    "name": "Baken",
-    "slug": "baken-mobile",
+    "name": "馬券収支管理",
+    "slug": "baken",
     "scheme": "baken",
+    "newArchEnabled": true,  // ← ONに変更
     "ios": {
       "bundleIdentifier": "com.do-deuce-fan.baken",
       "buildNumber": "1"
     },
     "plugins": [
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "newArchEnabled": false
-          }
-        }
-      ]
+      "expo-router"
     ]
   }
 }
@@ -294,12 +361,26 @@ React Native 0.68+で導入された新しいレンダリングエンジン:
 {
   "build": {
     "production": {
-      "autoIncrement": true,
-      "env": {
-        "RCT_NEW_ARCH_ENABLED": "0"
-      }
+      "autoIncrement": true
+      // RCT_NEW_ARCH_ENABLEDは削除（矛盾を排除）
     }
   }
+}
+```
+
+### package.json（依存関係）
+```json
+{
+  "dependencies": {
+    "expo": "~54.0.32",
+    "react-native": "0.81.5",
+    "react-native-reanimated": "~4.1.1",  // ← 4.1.1に更新
+    "nativewind": "^4.2.1",
+    "expo-router": "~6.0.22",
+    "react-native-screens": "~4.16.0",
+    "lucide-react-native": "^0.562.0"
+  }
+  // expo.install.excludeは削除
 }
 ```
 
@@ -346,37 +427,52 @@ module.exports = withNativeWind(config, { input: "./global.css" });
 
 ---
 
-## 次のステップ（推奨）
+## ✅ 解決済み - 同様の問題に遭遇した場合
 
-1. **Expo/React Nativeコミュニティに相談**
-   - Expo Discord
-   - React Native Discord
-   - Stack Overflow
+このドキュメントが同じ問題に遭遇した方の役に立つことを願っています。
 
-2. **Reanimated GitHubでIssue検索/作成**
-   - 同様の問題を抱えている人がいるか確認
-   - Folly + RN 0.81 + Reanimated 3の組み合わせで報告
+### 解決のポイント
 
-3. **Expo SDK 53へのダウングレード検討**
-   - 一時的な回避策として
+1. **誤った前提を疑う**
+   - ドキュメントやブログ記事の情報が古い可能性
+   - NativeWindのようなライブラリは頻繁に更新される
+   - 公式リポジトリのリリースノートを確認
 
-4. **代替アニメーションライブラリ検討**
-   - Reanimatedなしでnativewindが動作するか確認
-   - アニメーション使用箇所の洗い出し
+2. **矛盾する設定を排除**
+   - `app.json`と`eas.json`の設定が矛盾していないか確認
+   - `package.json`の`expo.install.exclude`が不要な制約になっていないか確認
+
+3. **SDK推奨構成に従う**
+   - `npx expo-doctor`でチェック
+   - `npx expo install --fix`で依存関係を整合
+   - 手動でバージョンを決め打ちしない
+
+4. **キャッシュクリア**
+   - `eas build --clear-cache`でクリーンビルド
+   - EASの古い生成物が残っていると問題が起きることがある
 
 ---
 
-## 質問時に提供すると良い情報
+## ~~質問時に提供すると良い情報~~（解決済み）
 
-- このドキュメントのリンク
+同様の問題に遭遇した方がコミュニティで質問する場合に有用な情報:
+
+- このドキュメント（解決までの過程を記録）
 - 完全なpackage.json
 - 完全なクラッシュログ（App Store Connectから取得）
 - `npx expo-doctor`の出力結果
+- `app.json`と`eas.json`の設定（矛盾がないか確認）
 
 ---
 
 ## 連絡先・更新履歴
 
 **作成日**: 2026-01-24
-**最終更新**: 2026-01-24
+**解決日**: 2026-01-25
+**最終更新**: 2026-01-25
 **作成者**: Claude Code調査レポート
+
+### 更新履歴
+- 2026-01-24: 初版作成（問題調査中）
+- 2026-01-25: 解決策追加（New Arch ON + Reanimated 4で解決）
+- 誤った前提（nativewind 4がreanimated 4未サポート）を訂正
